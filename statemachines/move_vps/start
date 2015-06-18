@@ -1,0 +1,31 @@
+#!/bin/sh
+
+. /etc/restatemachine/shell_helpers.inc
+
+if [ x"$1" = x"--help" ]; then
+        cat <<ENDOFUSAGE
+This state machine is used to perform a move of a shared hosting website to a
+website hosted on a virtial machine.
+
+The states are:
+start
+wait_for_vps
+create_managed
+wait_for_acceptance
+update_dns
+delete_website
+
+revert_migration
+
+Input needed (JSON):
+SiteName -> Hostname of website to move
+AccountId -> The account id 
+VpsId -> Logical id of the vps to move the website ti
+ENDOFUSAGE
+        exit 0
+fi
+
+cat
+restatemachine_transition_to "wait_for_vps"
+restatemachine_transition_after_seconds "0"
+restatemachine_status_message "Starting wait for vps state"

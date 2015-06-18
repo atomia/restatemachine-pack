@@ -1,0 +1,57 @@
+#!/bin/sh
+DIR=`dirname $0`
+. $DIR/lib/json
+. /etc/restatemachine/shell_helpers.inc
+INPUT=`cat`
+ACCOUNT=`Json "$INPUT" "AccountId"`
+VPSID=`Json "$INPUT" "VpsId"`
+
+Error () {
+        echo -n $INPUT 
+	restatemachine_transition_to "wait_for_vps"
+	restatemachine_transition_after_seconds 10
+        restatemachine_status_message "$1"
+        exit 0 
+}
+
+# Get the logical id for CsCloud
+CSCLOUD=`atomia service list --account $ACCOUNT | jgrep name=CsCloud -s logical_id 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not get CsCloud service"
+fi
+
+# Get the logical id of CsInstances
+CSINSTANCES=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}]' | jgrep name=CsInstances -s logical_id 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not get CsInstances service"
+fi
+
+EC2INSTANCEID=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}]' | jgrep name=EC2Instance -s logical_id 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not get EC2Instance id"
+fi
+
+
+FLOATINGIP=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}]' | jgrep name=EC2Instance | grep FloatingIP -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null`
+
+if [ "x$FLOATINGIP" = "x" ]; then
+        FLOATINGIP=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}, { "EC2Instance" : "'$EC2INSTANCEID'" }]' | jgrep name=EC2Address | grep IPv4 -C 5 | grep -Poz '\{([^}]+)\}' |  grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null`
+fi
+
+if [ "x$FLOATINGIP" = "x" ]; then
+	Error "Could not get Floating ip"
+fi
+
+# Test if ssh is up
+SSHSTATUS=`nc -z -w5 $FLOATINGIP 22; echo $? 2> /dev/null`
+if [ $SSHSTATUS -eq 0 ]; then
+	# Pass variables to next state
+	INPUT=`echo -n $INPUT | sed  '$s/}/, "CsCloud" : "'$CSCLOUD'", "CsInstances" : "'$CSINSTANCES'", "EC2InstanceLogicalId" : "'$EC2INSTANCEID'", "FloatingIP" : "'$FLOATINGIP'" }/'`
+	echo -n $INPUT
+	
+	restatemachine_transition_to "create_managed"
+	restatemachine_transition_after_seconds "0"
+	restatemachine_status_message "Adding managed service"
+	exit 0
+fi
+echo -n $INPUT

@@ -1,0 +1,73 @@
+#!/bin/sh
+DIR=`dirname $0`
+. $DIR/lib/json
+. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/shell_helpers.inc
+
+INPUT=`cat`
+ACCOUNT=`Json "$INPUT" "AccountId"`
+VPSID=`Json "$INPUT" "VpsId"`
+CSCLOUD=`Json "$INPUT" "CsCloud"`
+CSINSTANCES=`Json "$INPUT" "CsInstances"`
+SITENAME=`Json "$INPUT" "SiteName"`
+IP=`Json "$INPUT" "FloatingIP"`
+CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
+
+Error () {
+        echo -n $INPUT
+        restatemachine_transition_to "update_dns"
+        restatemachine_transition_after_seconds 10
+        restatemachine_status_message "$1"
+        exit 0 
+}
+
+# Remove dns records from CsLinuxWebsite
+OLDZONERECORD=`atomia service show --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"}, {"CsLinuxWebsite":{"Hostname" : "'$SITENAME'"}},{"CsLinuxBinding" : {"Hostname" : "'$SITENAME'"}}, {"DnsZone" : { "Zonename" : "'$SITENAME'"}}]' 2> /dev/null | jgrep -s logical_id 2> /dev/null`
+OLDZONERECORDWWW=`atomia service show --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"}, {"CsLinuxWebsite":{"Hostname" : "'$SITENAME'"}},{"CsLinuxBinding" : {"Hostname" : "www.'$SITENAME'"}}, {"DnsZone" : { "Zonename" : "'$SITENAME'"}}]' 2> /dev/null | jgrep -s logical_id 2> /dev/null`
+
+if [ "$OLDZONERECORD" != "" ]; then
+	DELRECORD=`atomia service delete --account $ACCOUNT --service "$OLDZONERECORD"`
+	if [ "$?" != "0" ]; then
+        	Error "Could not delete dns record $OLDZONERECORD"
+	fi
+fi
+
+if [ "$OLDZONERECORDWWW" != "" ]; then
+        DELRECORD=`atomia service delete --account $ACCOUNT --service "$OLDZONERECORDWWW"`
+        if [ "$?" != "0" ]; then
+                Error "Could not delete dns record $OLDZONERECORDWWW"
+        fi
+fi
+
+# Add dns records in managed service zone
+VPSZONEID=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}, {"CsVPSManagedItems" : "'$MANAGEDITEMS'"}, {"CsVPSManagedItem" : {"ItemName":"'$SITENAME'"}}]' 2> /dev/null | jgrep name=DnsZone -s logical_id 2> /dev/null`
+if [ "$VPSZONEID" != "" ]; then
+	RECORDEXISTS=`atomia service find --account $ACCOUNT --parent "$VPSZONEID"  --query '{ "name" : "DnsZoneRecord" }' 2> /dev/null | grep "@" -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null ` 
+ 	if [ "x$RECORDEXISTS" = "x" ]; then
+		ADDRECORD1=`atomia service add --account $ACCOUNT --parent "$VPSZONEID" --servicedata '{"name" : "DnsZoneRecord", "properties" : {"Data" : "'$IP'", "DnsType" : "A", "Label" : "@" }}' `
+        	if [ "$?" != "0" ]; then
+                	Error "Could not add dns record"
+        	fi
+	fi
+        RECORDEXISTS=`atomia service find --account $ACCOUNT --parent "$VPSZONEID"  --query '{ "name" : "DnsZoneRecord" }' 2> /dev/null | grep "www" -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null `
+        if [ "x$RECORDEXISTS" = "x" ]; then
+                ADDRECORD1=`atomia service add --account $ACCOUNT --parent "$VPSZONEID" --servicedata '{"name" : "DnsZoneRecord", "properties" : {"Data" : "'$IP'", "DnsType" : "A", "Label" : "www" }}' 2> /dev/null`
+        	if [ "$?" != "0" ]; then
+                	Error "Could not add dns record"
+        	fi
+        fi
+fi
+
+MODSTATUS=`atomia service modify --account $ACCOUNT --service "$CSLINUXWEBSITEID" --servicedata '{ "properties" : { "MigrationStatus" : "wait_dns"}}' 2> /dev/null`
+if [ "$?" != "0" ]; then
+	Error "Could not update website status"
+fi
+
+echo -n $INPUT
+restatemachine_transition_to "delete_website"
+restatemachine_transition_after_seconds 60 
+#restatemachine_transition_after_seconds 172800
+restatemachine_status_message "Dns updated, waiting 48 hours until removing website"
+exit 0
+
+

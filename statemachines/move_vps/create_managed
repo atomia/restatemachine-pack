@@ -1,0 +1,91 @@
+#!/bin/sh
+DIR=`dirname $0`
+. $DIR/lib/json
+. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/shell_helpers.inc
+
+INPUT=`cat`
+ACCOUNT=`Json "$INPUT" "AccountId"`
+VPSID=`Json "$INPUT" "VpsId"`
+CSCLOUD=`Json "$INPUT" "CsCloud"`
+CSINSTANCES=`Json "$INPUT" "CsInstances"`
+SITENAME=`Json "$INPUT" "SiteName"`
+IP=`Json "$INPUT" "FloatingIP"`
+
+Error () {
+        echo -n $INPUT
+        restatemachine_transition_to "wait_for_vps"
+        restatemachine_transition_after_seconds 10
+        restatemachine_status_message "$1"
+        exit 0 
+}
+
+CSBASE=`atomia service list --account $ACCOUNT | jgrep name=CsBase -s logical_id 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not get CsCloud service"
+fi
+
+ROOTFOLDER=`atomia service list --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"} ]' 2> /dev/null | jgrep name=RootFolder 2> /dev/null`
+ROOTFOLDERID=`echo -n "$ROOTFOLDER" | jgrep -s logical_id 2> /dev/null` 
+FOLDERPATH=`echo -n "$ROOTFOLDER" | grep FolderPath -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null` 
+FOLDERNAME=`echo -n "$ROOTFOLDER" | grep Name -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null` 
+
+# Do archive operation
+ARCHIVEARG='{"archivepath":"'$FOLDERPATH'/'$FOLDERNAME'/'$SITENAME'.tar.gz","flags":"cvzf","permissions":"700","archivetype":"tar","operationUrl":"'$FOLDERPATH'/'$FOLDERNAME'/'$SITENAME'/public_html"}'
+ARCHIVEOP=`atomia service operation --account $ACCOUNT --service $ROOTFOLDERID --operation "ArchiveFolder" --arg $ARCHIVEARG 2> /dev/null`
+if [ "$?" != "0" ]; then 
+	Error "Could not archive folder" 
+fi
+
+# Get content of archive
+SITECONTENT=`atomia service operation --account $ACCOUNT --service $ROOTFOLDERID --operation "GetFileContent" --arg "$FOLDERPATH/$FOLDERNAME/$SITENAME.tar.gz" 2> /dev/null`
+if [ "$?" != "0" ]; then 
+	Error "Could not get content of archive" 
+fi
+
+# There might be cases where CsVPSManagedItems does not exist for example on brand new VPSs we need to take care of this
+MANAGEDITEMS=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}]' 2> /dev/null | jgrep name=CsVPSManagedItems -s logical_id 2> /dev/null`
+if [ "$MANAGEDITEMS" = "" ]; then
+	MANAGEDITEMS=`atomia service add --account $ACCOUNT --parent "$VPSID" --servicedata '{ "name" : "CsVPSManagedItems", "properties" : { "IpAddress" : "'$IP'" }}' | jgrep name=CsVPSManagedItems -s logical_id 2> /dev/null`
+fi
+MANAGEDITEM=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}, {"CsVPSManagedItems" : "'$MANAGEDITEMS'"}]' | jgrep name=CsVPSManagedItem 2> /dev/null | grep ItemName -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// | grep $SITENAME | wc -l 2> /dev/null`
+if [ $MANAGEDITEM -eq 0 ]; then
+	ADDITEMSERVICE=`atomia service add --account $ACCOUNT --parent "$MANAGEDITEMS" --servicedata '{ "name" : "CsVPSManagedItem", "properties" : { "SkipDNS" : "true", "ItemName" : "'$SITENAME'", "ItemType" : "ApacheWebsite", "ItemMetaData" : "{\"ArchiveType\":\"tar.gz\",\"InitialWebsiteContent\":\"'$SITECONTENT'\"}" }}' 2> /dev/null ` 
+	if [ "$?" != "0" ]; then
+	        Error "Could not add managed service"
+	fi
+	MANAGEDSERVICEID=`echo  "$ADDITEMSERVICE" | grep logical_id | awk '{print $2}' | sed 's/"//g' | sed 's/,//'`
+fi
+
+# Update the preview zone of the website service
+DNSPREVIEW=`atomia service list --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"}, {"CsLinuxWebsite":{"Hostname" : "'$SITENAME'"}},{"CsLinuxBinding" : {"DnsZone" : "'$PREVIEWZONE'"}}, {"DnsZone" : { "Zonename" : "'$PREVIEWZONE'"}}]' 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not find dns preview zone for $SITENAME.$PREVIEWZONE"
+fi
+
+PREVIEWRECORDID=`echo "$DNSPREVIEW" | jgrep name=DnsZoneRecord -s logical_id 2> /dev/null`
+PREVIEWRECORDATA=`echo -n1 "$DNSPREVIEW" |  grep Data -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,//`
+if [ "$PREVIEWRECORDATA" != "$IP" ]; then
+	MODPREVIEW=`atomia service modify --account $ACCOUNT --service "$PREVIEWRECORDID" --servicedata '{ "properties" : { "Data" : "'$IP'"}}' 2> /dev/null`
+	if [ "$?" != "0" ]; then
+        	Error "Could not update preview dns record for $SITENAME.$PREVIEWZONE"
+	fi
+fi
+
+# Update migration status to pending
+CSWEBSITE=`atomia service show --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"}, {"CsLinuxWebsite":{"Hostname" : "'$SITENAME'"}}]' 2> /dev/null`
+CSWEBSITEID=`echo "$CSWEBSITE" | jgrep name=CsLinuxWebsite -s logical_id 2> /dev/null`
+MIGRATIONSTATUS=`echo "$CSWEBSITE" | grep MigrationStatus -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,//`
+if [ "$MIGRATIONSTATUS" != "pending" ]; then
+	MODSTATUS=`atomia service modify --account $ACCOUNT --service "$CSWEBSITEID" --servicedata '{ "properties" : { "MigrationStatus" : "pending"}}' 2> /dev/null`
+	if [ "$?" != "0" ]; then
+		Error "Could not modfy migration status"
+	fi
+fi
+
+INPUT=`echo -n $INPUT | sed  '$s/}/, "CsLinuxWebsiteId" : "'$CSWEBSITEID'", "ManagedServiceId" : "'$MANAGEDSERVICEID'" }/'`
+echo -n "$INPUT"
+restatemachine_transition_to "wait_for_acceptance"
+restatemachine_transition_after_seconds "0"
+restatemachine_status_message "Done"
+exit 0

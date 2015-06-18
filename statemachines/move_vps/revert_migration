@@ -1,0 +1,56 @@
+#!/bin/sh
+DIR=`dirname $0`
+. $DIR/lib/json
+. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/shell_helpers.inc
+
+INPUT=`cat`
+ACCOUNT=`Json "$INPUT" "AccountId"`
+VPSID=`Json "$INPUT" "VpsId"`
+CSCLOUD=`Json "$INPUT" "CsCloud"`
+CSINSTANCES=`Json "$INPUT" "CsInstances"`
+SITENAME=`Json "$INPUT" "SiteName"`
+IP=`Json "$INPUT" "FloatingIP"`
+CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
+
+Error () {
+        echo -n $INPUT
+        restatemachine_transition_to "revert_migration"
+        restatemachine_transition_after_seconds 3600
+        restatemachine_status_message "$1"
+        exit 0 
+}
+
+# Delete managed item
+MANAGEDITEMS=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}]' 2> /dev/null | jgrep name=CsVPSManagedItems -s logical_id 2> /dev/null`
+MANAGEDITEMID=`atomia service show --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}, {"CsVPSManagedItems" : "'$MANAGEDITEMS'"}, {"CsVPSManagedItem" : {"ItemName":"'$SITENAME'"}}]' 2> /dev/null | jgrep -s logical_id 2> /dev/null`
+DELMANAGED=`atomia service delete --account $ACCOUNT --service "$MANAGEDITEMID" 2> /dev/null`
+if [ "$?" != "0" ]; then 
+	Error "Could not delete managed service" 
+fi
+
+# Update the preview zone of the website service
+DNSPREVIEW=`atomia service list --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"}, {"CsLinuxWebsite":{"Hostname" : "'$SITENAME'"}},{"CsLinuxBinding" : {"DnsZone" : "'$PREVIEWZONE'"}}, {"DnsZone" : { "Zonename" : "'$PREVIEWZONE'"}}]' 2> /dev/null`
+if [ "$?" != "0" ]; then
+        Error "Could not find dns preview zone for $SITENAME.$PREVIEWZONE"
+fi
+
+PREVIEWRECORDID=`echo "$DNSPREVIEW" | jgrep name=DnsZoneRecord -s logical_id `
+PREVIEWRECORDATA=`echo -n1 "$DNSPREVIEW" |  grep Data -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null`
+if [ "$PREVIEWRECORDATA" != "$CLUSTERIP" ]; then
+        MODPREVIEW=`atomia service modify --account $ACCOUNT --service "$PREVIEWRECORDID" --servicedata '{ "properties" : { "Data" : "'$CLUSTERIP'"}}' 2> /dev/null`
+        if [ "$?" != "0" ]; then
+                Error "Could not update preview dns record for $SITENAME.$PREVIEWZONE"
+        fi
+fi
+
+MODSTATUS=`atomia service modify --account $ACCOUNT --service "$CSWEBSITEID" --servicedata '{ "properties" : { "MigrationStatus" : ""}}' 2> /dev/null`
+if [ "$?" != "0" ]; then 
+	Error "Could not update migration status" 
+fi
+
+restatemachine_transition_to "stop"
+restatemachine_transition_after_seconds 0
+estatemachine_status_message "Migration rolled back"
+exit 0
+
