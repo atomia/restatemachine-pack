@@ -16,7 +16,7 @@ CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
 Error () {
         echo -n $INPUT
         restatemachine_transition_to "update_dns"
-        restatemachine_transition_after_seconds 10
+        restatemachine_transition_after_seconds 120 
         restatemachine_status_message "$1"
         exit 0 
 }
@@ -65,8 +65,7 @@ fi
 
 echo -n $INPUT
 restatemachine_transition_to "delete_website"
-restatemachine_transition_after_seconds 60 
-#restatemachine_transition_after_seconds 172800
+restatemachine_transition_after_seconds $DNS_STATE_DELAY 
 restatemachine_status_message "Dns updated, waiting 48 hours until removing website"
 exit 0
 

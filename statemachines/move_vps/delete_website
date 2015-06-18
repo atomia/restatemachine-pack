@@ -17,8 +17,7 @@ MANAGEDSERVICEID=`Json "$INPUT" "ManagedServiceId"`
 Error () {
         echo -n $INPUT
         restatemachine_transition_to "delete_website"
-        restatemachine_transition_after_seconds 60
-	# 3600
+        restatemachine_transition_after_seconds 120 
         restatemachine_status_message "$1"
         exit 0 
 }
