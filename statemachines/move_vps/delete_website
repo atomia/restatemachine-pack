@@ -58,6 +58,6 @@ fi
 
 restatemachine_transition_to "stop"
 restatemachine_transition_after_seconds 0
-estatemachine_status_message "Migration completed"
+restatemachine_status_message "Migration completed"
 exit 0
 
