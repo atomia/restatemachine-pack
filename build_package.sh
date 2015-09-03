@@ -39,4 +39,6 @@ $fpm -s dir -t "$package_type" -n restatemachine-pack  -v "$1" --config-files /e
 	--description "Restatemachine pack contains state machines for restatemachine" \
 	-m "Atomia AB <info@atomia.com>" --vendor "Atomia AB" --url http://github.com/atomia/restatemachine-pack \
 	--license MIT \
+	--after-install postinstall \
+	-d atomia-manager \
 	statemachines/=/etc/restatemachine/statemachines default_config/=/etc/restatemachine/ 

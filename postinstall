@@ -1,0 +1,23 @@
+#!/bin/sh
+
+distributor=`lsb_release -i | awk '{ print $NF }'`
+if [ -z "$distributor" ]; then
+        echo "lsb_release -i failed to give distro identifier"
+        exit 1
+elif [ x"$distributor" = x"Ubuntu" -o x"$distributor" = x"Debian" ]; then
+        package_type="deb"
+elif [ x"$distributor" = x"RedHatEnterpriseServer" ]; then
+        package_type="rpm"
+fi
+
+gem=`whereis gem | head -n 1 | awk '{ print $2 }'`
+
+if [ -z "$gem" ] || [ ! -x "$gem" ]; then
+        if [ x"$package_type" = x"deb" ]; then
+                apt-get install rubygems
+        elif [ x"$package_type" = x"rpm" ]; then
+                yum install rubygems
+        fi
+fi
+
+gem install jgrep
