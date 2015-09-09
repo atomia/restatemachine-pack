@@ -1,7 +1,7 @@
 #!/bin/sh
 DIR=`dirname $0`
 . $DIR/lib/json
-. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/restatemachine-pack.conf
 . /etc/restatemachine/shell_helpers.inc
 
 INPUT=`cat`
@@ -9,29 +9,26 @@ ACCOUNT=`Json "$INPUT" "AccountId"`
 CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
 
 Error () {
-        echo -n $INPUT
+        echo -n "$INPUT"
         restatemachine_transition_to "wait_for_acceptance"
         restatemachine_transition_after_seconds 60
         restatemachine_status_message "$1"
-        exit 0 
+        exit 0
 }
 
-CSWEBSITE=`atomia service show --account $ACCOUNT --service "$CSLINUXWEBSITEID"`
+CSWEBSITE=`atomia service show --account $ACCOUNT --service "$CSLINUXWEBSITEID" 2> /dev/null`
 MIGRATIONSTATUS=`echo "$CSWEBSITE" | grep MigrationStatus -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,//`
 if [ "$MIGRATIONSTATUS" = "accepted" ]; then
-        echo -n $INPUT
+        echo -n "$INPUT"
         restatemachine_transition_to "update_dns"
         restatemachine_transition_after_seconds 0
         restatemachine_status_message "Updating dns"
-	exit 0 
+	exit 0
 elif [ "$MIGRATIONSTATUS" = "canceled" ]; then
-        echo -n $INPUT
+        echo -n "$INPUT"
         restatemachine_transition_to "revert_migration"
         restatemachine_transition_after_seconds 0
         restatemachine_status_message "Migration canceled, reverting"
 	exit 0
 fi
 Error "Migration pending approval"
-
-
-

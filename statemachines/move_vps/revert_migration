@@ -1,7 +1,7 @@
 #!/bin/sh
 DIR=`dirname $0`
 . $DIR/lib/json
-. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/restatemachine-pack.conf
 . /etc/restatemachine/shell_helpers.inc
 
 INPUT=`cat`
@@ -14,19 +14,19 @@ IP=`Json "$INPUT" "FloatingIP"`
 CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
 
 Error () {
-        echo -n $INPUT
+        echo -n "$INPUT"
         restatemachine_transition_to "revert_migration"
         restatemachine_transition_after_seconds 3600
         restatemachine_status_message "$1"
-        exit 0 
+        exit 0
 }
 
 # Delete managed item
 MANAGEDITEMS=`atomia service list --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}]' 2> /dev/null | jgrep name=CsVPSManagedItems -s logical_id 2> /dev/null`
 MANAGEDITEMID=`atomia service show --account $ACCOUNT --path '[{"CsCloud" : "'$CSCLOUD'"}, {"CsInstances" : "'$CSINSTANCES'"}, {"CsVPSInstance" : "'$VPSID'"}, {"CsVPSManagedItems" : "'$MANAGEDITEMS'"}, {"CsVPSManagedItem" : {"ItemName":"'$SITENAME'"}}]' 2> /dev/null | jgrep -s logical_id 2> /dev/null`
 DELMANAGED=`atomia service delete --account $ACCOUNT --service "$MANAGEDITEMID" 2> /dev/null`
-if [ "$?" != "0" ]; then 
-	Error "Could not delete managed service" 
+if [ "$?" != "0" ]; then
+	Error "Could not delete managed service"
 fi
 
 # Update the preview zone of the website service
@@ -45,12 +45,11 @@ if [ "$PREVIEWRECORDATA" != "$CLUSTERIP" ]; then
 fi
 
 MODSTATUS=`atomia service modify --account $ACCOUNT --service "$CSWEBSITEID" --servicedata '{ "properties" : { "MigrationStatus" : ""}}' 2> /dev/null`
-if [ "$?" != "0" ]; then 
-	Error "Could not update migration status" 
+if [ "$?" != "0" ]; then
+	Error "Could not update migration status"
 fi
 
 restatemachine_transition_to "stop"
 restatemachine_transition_after_seconds 0
 restatemachine_status_message "Migration rolled back"
 exit 0
-

@@ -1,7 +1,7 @@
 #!/bin/sh
 DIR=`dirname $0`
 . $DIR/lib/json
-. /etc/restatemachine/restatemachine-pack.conf 
+. /etc/restatemachine/restatemachine-pack.conf
 . /etc/restatemachine/shell_helpers.inc
 
 INPUT=`cat`
@@ -15,11 +15,11 @@ CSLINUXWEBSITEID=`Json "$INPUT" "CsLinuxWebsiteId"`
 MANAGEDSERVICEID=`Json "$INPUT" "ManagedServiceId"`
 
 Error () {
-        echo -n $INPUT
+        echo -n "$INPUT"
         restatemachine_transition_to "delete_website"
-        restatemachine_transition_after_seconds 120 
+        restatemachine_transition_after_seconds 120
         restatemachine_status_message "$1"
-        exit 0 
+        exit 0
 }
 
 CSWEBSITE=`atomia service show --account $ACCOUNT --service "$CSLINUXWEBSITEID" 2> /dev/null`
@@ -30,34 +30,33 @@ if [ "$MIGRATIONSTATUS" != "wait_dns" ]; then
         restatemachine_transition_to "revert_migration"
         restatemachine_transition_after_seconds 0
         restatemachine_status_message "Wrong migration status, reverting"
-        exit 0 
+        exit 0
 fi
 
 DIG=`dig A $SITENAME @8.8.8.8 | grep "$IP" | wc -l`
 #if [ $DIG -eq 0 ]; then
-	# DNS not ok 
+	# DNS not ok
 #	Error "DNS not ok yet"
 #fi
 
 # Backup all files
 ROOTFOLDER=`atomia service list --account $ACCOUNT --path '[{"CsBase" : "'$CSBASE'"} ]' 2> /dev/null| jgrep name=RootFolder 2> /dev/null`
-ROOTFOLDERID=`echo -n "$ROOTFOLDER" | jgrep -s logical_id` 
-FOLDERPATH=`echo -n "$ROOTFOLDER" | grep FolderPath -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null` 
-FOLDERNAME=`echo -n "$ROOTFOLDER" | grep Name -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null` 
+ROOTFOLDERID=`echo -n "$ROOTFOLDER" | jgrep -s logical_id`
+FOLDERPATH=`echo -n "$ROOTFOLDER" | grep FolderPath -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null`
+FOLDERNAME=`echo -n "$ROOTFOLDER" | grep Name -C 5 | grep -Poz '\{([^}]+)\}' | grep prop_string_value | awk '{ print $2}' | sed s/\"//g | sed s/\,// 2> /dev/null`
 ARCHIVEARG='{"archivepath":"'$FOLDERPATH'/'$FOLDERNAME'/'$SITENAME'.tar.gz","flags":"cvzf","permissions":"700","archivetype":"tar","operationUrl":"'$FOLDERPATH'/'$FOLDERNAME'/'$SITENAME'"}'
 ARCHIVEOP=`atomia service operation --account $ACCOUNT --service $ROOTFOLDERID --operation "ArchiveFolder" --arg $ARCHIVEARG 2> /dev/null`
-if [ "$?" != "0" ]; then 
-	Error "Could not archive folder" 
+if [ "$?" != "0" ]; then
+	Error "Could not archive folder"
 fi
 
 # Delete website
-SWITCH=`atomia service switch --account $ACCOUNT --service "$CSLINUXWEBSITEID" --newservice "CsDomainNoWebsite" --servicedata '{ "properties" : { "Domain" : "'$SITENAME'", "DnsZone" : "'$SITENAME'", "DomainPrefix": "", "InitEmail" : "", "ManagedBy": "'$MANAGEDSERVICEID'" }}'`
-if [ "$?" != "0" ]; then 
-	Error "Could not delete website" 
+SWITCH=`atomia service switch --account $ACCOUNT --service "$CSLINUXWEBSITEID" --newservice "CsDomainNoWebsite" --servicedata '{ "properties" : { "Domain" : "'$SITENAME'", "DnsZone" : "'$SITENAME'", "DomainPrefix": "", "InitEmail" : "", "ManagedBy": "'$MANAGEDSERVICEID'" }}' 2> /dev/null`
+if [ "$?" != "0" ]; then
+	Error "Could not delete website"
 fi
 
 restatemachine_transition_to "stop"
 restatemachine_transition_after_seconds 0
 restatemachine_status_message "Migration completed"
 exit 0
-
